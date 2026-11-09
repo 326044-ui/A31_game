@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>勇者の冒険 - ブラウザRPG</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #000;
+            color: #fff;
+            font-family: 'DotGothic16', sans-serif;
+            overflow: hidden;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* レトロなウィンドウ枠 */
+        .retro-box {
+            background-color: #000;
+            border: 4px solid #fff;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 0 0 2px #000, inset 0 0 0 2px #000;
+        }
+
+        /* ゲーム画面コンテナ */
+        #game-container {
+            position: relative;
+            width: 100%;
+            max-width: 800px;
+            height: 100vh;
+            max-height: 800px;
+            margin: 0 auto;
+            background-color: #000;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* マップキャンバス */
+        #map-canvas {
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+            display: block;
+        }
+
+        /* 画面レイヤー */
+        .screen-layer {
+            position: absolute;
+            inset: 0;
+            display: none;
+            flex-direction: column;
+        }
+        .screen-active {
+            display: flex;
+        }
+
+        /* アニメーション */
+        @keyframes shake {
+            0% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            50% { transform: translateX(10px); }
+            75% { transform: translateX(-10px); }
+            100% { transform: translateX(0); }
+        }
+        @keyframes flash {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: rgba(255, 0, 0, 0.5); }
+        }
+        @keyframes flash-white {
+            0%, 100% { background-color: transparent; }
+            50% { background-color: rgba(255, 255, 255, 0.8); }
+        }
+        @keyframes enemy-appear {
+            0% { transform: scale(0); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .anim-shake { animation: shake 0.4s ease-in-out; }
+        .anim-flash { animation: flash 0.3s; }
+        .anim-flash-white { animation: flash-white 0.3s; }
+        
+        /* 十字キー */
+        .d-pad {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 150px;
+            height: 150px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: repeat(3, 1fr);
+            gap: 5px;
+            z-index: 50;
+        }
+        .d-btn {
+            background-color: rgba(255, 255, 255, 0.3);
+            border: 2px solid #fff;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: white;
+            cursor: pointer;
+        }
+        .d-btn:active { background-color: rgba(255, 255, 255, 0.6); }
+        .d-up { grid-column: 2; grid-row: 1; }
+        .d-left { grid-column: 1; grid-row: 2; }
+        .d-right { grid-column: 3; grid-row: 2; }
+        .d-down { grid-column: 2; grid-row: 3; }
+
+        /* バトルUI */
+        .battle-enemy-area {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 120px;
+            text-shadow: 0 0 20px rgba(255,255,255,0.5);
+            animation: enemy-appear 0.5s ease-out;
+        }
+        
+        /* カスタムスクロールバー */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #000; border-left: 2px solid #fff; }
+        ::-webkit-scrollbar-thumb { background: #fff; }
+
+        /* カーソル点滅 */
+        .cursor-blink::after {
+            content: '▼';
+            display: inline-block;
+            animation: blink 1s step-end infinite;
+            margin-left: 5px;
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+
+        /* メニューのボタン */
+        .cmd-btn {
+            text-align: left;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .cmd-btn:hover, .cmd-btn:focus {
+            background-color: #fff;
+            color: #000;
+            outline: none;
+        }
+
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    
+    <!-- 全体フラッシュ用レイヤー -->
+    <div id="fx-layer" class="absolute inset-0 pointer-events-none z-50"></div>
+
+    <!-- タイトル画面 -->
+    <div id="screen-title" class="screen-layer screen-active items-center justify-center bg-black z-40">
+        <h1 class="text-5xl md:text-7xl font-bold mb-4 text-center tracking-widest leading-tight">勇者の<br>冒険</h1>
+        <p class="mb-12 text-gray-400">THE BROWSER QUEST</p>
+        <div class="retro-box text-2xl px-8 py-4 cursor-pointer hover:bg-white hover:text-black transition-colors" onclick="startGame()">
+            ぼうけんをはじめる
+        </div>
+    </div>
+
+    <!-- マップ画面 -->
+    <div id="screen-map" class="screen-layer bg-[#4ade80]">
+        <canvas id="map-canvas"></canvas>
+        
+        <!-- ステータスウィンドウ (常時表示) -->
+        <div class="retro-box absolute top-4 left-4 min-w-[120px] text-lg lg:text-xl z-10 bg-black/80">
+            <div>ゆうしゃ</div>
+            <div>LV <span id="st-lv">1</span></div>
+            <div>HP <span id="st-hp">20</span>/<span id="st-maxhp">20</span></div>
+            <div>MP <span id="st-mp">0</span>/<span id="st-maxmp">0</span></div>
+            <div>EX <span id="st-ex">0</span></div>
+        </div>
+
+        <!-- オンスクリーン十字キー -->
+        <div class="d-pad" id="d-pad">
+            <div class="d-btn d-up" onmousedown="movePlayer(0, -1)" ontouchstart="event.preventDefault(); movePlayer(0, -1)">▲</div>
+            <div class="d-btn d-left" onmousedown="movePlayer(-1, 0)" ontouchstart="event.preventDefault(); movePlayer(-1, 0)">◀</div>
+            <div class="d-btn d-right" onmousedown="movePlayer(1, 0)" ontouchstart="event.preventDefault(); movePlayer(1, 0)">▶</div>
+            <div class="d-btn d-down" onmousedown="movePlayer(0, 1)" ontouchstart="event.preventDefault(); movePlayer(0, 1)">▼</div>
+        </div>
+    </div>
+
+    <!-- バトル画面 -->
+    <div id="screen-battle" class="screen-layer bg-black z-20" style="background: linear-gradient(to bottom, #111, #333);" onclick="advanceMessage()">
+        
+        <!-- 敵表示エリア -->
+        <div id="battle-enemy-container" class="battle-enemy-area">
+            <span id="battle-enemy-emoji">👾</span>
+        </div>
+
+        <!-- バトルUI下部 -->
+        <div class="h-1/2 flex flex-col p-2 gap-2">
+            
+            <div class="flex gap-2 h-32">
+                <!-- ステータス -->
+                <div class="retro-box w-1/3 text-lg flex flex-col justify-center">
+                    <div>ゆうしゃ</div>
+                    <div>HP <span id="bat-hp">20</span></div>
+                    <div>MP <span id="bat-mp">0</span></div>
+                </div>
+
+                <!-- コマンドメニュー -->
+                <div class="retro-box w-2/3 grid grid-cols-2 gap-2 text-xl p-4" id="battle-commands">
+                    <button class="cmd-btn" onclick="event.stopPropagation(); execCommand('attack')">1:たたかう</button>
+                    <button class="cmd-btn" onclick="event.stopPropagation(); execCommand('magic')">2:じゅもん</button>
+                    <button class="cmd-btn text-gray-500" disabled>3:どうぐ</button>
+                    <button class="cmd-btn" onclick="event.stopPropagation(); execCommand('flee')">4:にげる</button>
+                </div>
+            </div>
+
+            <!-- メッセージウィンドウ -->
+            <div class="retro-box flex-1 text-xl p-4 overflow-y-auto" id="battle-message-box">
+                <div id="battle-message"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ゲームオーバー画面 -->
+    <div id="screen-gameover" class="screen-layer items-center justify-center bg-red-900 z-50">
+        <h1 class="text-4xl text-white mb-8">おお ゆうしゃよ！<br>しんでしまうとは なにごとだ！</h1>
+        <div class="retro-box text-xl px-6 py-3 cursor-pointer hover:bg-white hover:text-red-900" onclick="location.reload()">
+            リセットする
+        </div>
+    </div>
+
+</div>
+
+<script>
+    // --- サウンド生成 (Web Audio API) ---
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContext();
+
+    function playTone(freq, type, duration, vol=0.1) {
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+    }
+
+    function playNoise(duration) {
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+        const bufferSize = audioCtx.sampleRate * duration;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            data[i] = Math.random() * 2 - 1;
+        }
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+        const gain = audioCtx.createGain();
+        
+        // 攻撃の打撃音っぽくエンベロープをつける
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        
+        // ローパスフィルタでこもった音にする
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 1000;
+
+        noise.connect(filter);
+        filter.connect(gain);
+        gain.connect(audioCtx.destination);
+        noise.start();
+    }
+
+    const sfx = {
+        blip: () => playTone(800, 'square', 0.1, 0.05),
+        step: () => playTone(150, 'triangle', 0.05, 0.1),
+        bump: () => playTone(100, 'sawtooth', 0.1, 0.1),
+        encounter: () => {
+            playTone(400, 'square', 0.1);
+            setTimeout(() => playTone(600, 'square', 0.2), 100);
+            setTimeout(() => playTone(800, 'square', 0.4), 200);
+        },
+        attack: () => playNoise(0.2),
+        magic: () => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.5);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.5);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.5);
+        },
+        damage: () => playTone(150, 'sawtooth', 0.3, 0.2),
+        levelUp: () => {
+            playTone(523.25, 'square', 0.15, 0.1); // C5
+            setTimeout(() => playTone(659.25, 'square', 0.15, 0.1), 150); // E5
+            setTimeout(() => playTone(783.99, 'square', 0.15, 0.1), 300); // G5
+            setTimeout(() => playTone(1046.50, 'square', 0.4, 0.1), 450); // C6
+        }
+    };
+
+
+    // --- ゲームデータ ---
+    const TILE = {
+        GRASS: 0,
+        TREES: 1,
+        MOUNTAIN: 2,
+        WATER: 3,
+        CASTLE: 4,
+        TOWN: 5
+    };
+
+    const TILE_COLORS = {
+        [TILE.GRASS]: '#4ade80',
+        [TILE.TREES]: '#166534',
+        [TILE.MOUNTAIN]: '#78350f',
+        [TILE.WATER]: '#3b82f6',
+        [TILE.CASTLE]: '#94a3b8',
+        [TILE.TOWN]: '#d97706'
+    };
+
+    // 20x20 マップデータ
+    const mapData = [
+        [3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
+        [3,0,0,0,1,1,0,0,0,2,2,0,0,0,0,1,1,1,3,3],
+        [3,0,4,0,0,1,1,0,2,2,2,2,0,0,1,1,0,0,0,3],
+        [3,0,0,0,0,0,0,0,2,2,2,0,0,1,1,0,0,0,0,3],
+        [3,1,1,0,0,0,0,0,0,2,0,0,0,0,0,0,5,0,0,3],
+        [3,1,1,1,0,0,3,3,0,0,0,0,0,0,0,0,0,0,0,3],
+        [3,0,1,0,0,3,3,3,3,0,0,0,1,1,0,0,0,0,3,3],
+        [3,0,0,0,3,3,3,3,3,3,0,1,1,1,1,0,0,3,3,3],
+        [3,0,0,0,0,3,3,0,0,0,0,2,2,1,1,0,0,3,3,3],
+        [3,2,2,0,0,0,0,0,0,0,2,2,2,2,0,0,0,3,3,3],
+        [3,2,2,2,0,0,0,0,1,1,2,2,2,0,0,0,0,0,3,3],
+        [3,2,2,0,0,0,1,1,1,1,1,2,0,0,0,0,0,0,3,3],
+        [3,0,0,0,1,1,1,1,0,0,0,0,0,0,3,3,3,0,3,3],
+        [3,0,0,0,1,1,0,0,0,0,0,0,0,3,3,3,3,3,3,3],
+        [3,0,0,0,0,0,0,0,0,2,2,0,0,3,3,3,3,3,3,3],
+        [3,3,0,0,0,0,2,2,2,2,2,2,0,0,3,3,3,3,3,3],
+        [3,3,3,0,0,2,2,2,2,2,2,2,2,0,0,0,0,0,3,3],
+        [3,3,3,3,0,0,0,2,2,2,2,0,0,0,0,0,0,0,3,3],
+        [3,3,3,3,3,0,0,0,0,0,0,0,0,0,1,1,0,0,3,3],
+        [3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3]
+    ];
+    const MAP_COLS = mapData[0].length;
+    const MAP_ROWS = mapData.length;
+
+    // プレイヤー状態
+    const player = {
+        x: 2, y: 2,
+        lv: 1,
+        hp: 20, maxHp: 20,
+        mp: 0, maxMp: 0,
+        atk: 5, def: 2,
+        exp: 0,
+        nextExp: 10
+    };
+
+    // 敵データ
+    const enemies = [
+        { name: 'スライム', emoji: '💧', hp: 8, atk: 3, def: 1, exp: 3, minLv: 1 },
+        { name: 'コウモリ', emoji: '🦇', hp: 12, atk: 5, def: 2, exp: 5, minLv: 1 },
+        { name: 'ゴブリン', emoji: '👹', hp: 20, atk: 8, def: 4, exp: 12, minLv: 3 },
+        { name: 'ガイコツ', emoji: '💀', hp: 35, atk: 12, def: 8, exp: 25, minLv: 5 },
+        { name: 'ドラゴン', emoji: '🐉', hp: 80, atk: 25, def: 15, exp: 100, minLv: 7 }
+    ];
+
+    let currentEnemy = null;
+    let gameState = 'TITLE'; // TITLE, MAP, BATTLE, MSG_WAIT
+    let messageQueue = [];
+    let isMessageTyping = false;
+    let typeInterval = null;
+    let currentFullText = "";
+    let battleResolveCb = null; // バトル中の進行コールバック
+
+    // --- マップ描画系 ---
+    const canvas = document.getElementById('map-canvas');
+    const ctx = canvas.getContext('2d');
+    let tileSize = 40;
+
+    function resizeCanvas() {
+        // コンテナのサイズに合わせてキャンバスを設定
+        const container = document.getElementById('screen-map');
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        
+        // 画面の短辺に合わせてタイルサイズを調整 (画面内に10マス程度見えるように)
+        const minDim = Math.min(canvas.width, canvas.height);
+        tileSize = Math.floor(minDim / 9);
+        drawMap();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    function drawMap() {
+        if (gameState !== 'MAP') return;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // カメラ位置計算 (プレイヤーを中央に)
+        const camX = player.x * tileSize - canvas.width / 2 + tileSize / 2;
+        const camY = player.y * tileSize - canvas.height / 2 + tileSize / 2;
+
+        for (let row = 0; row < MAP_ROWS; row++) {
+            for (let col = 0; col < MAP_COLS; col++) {
+                const drawX = col * tileSize - camX;
+                const drawY = row * tileSize - camY;
+
+                // 画面外のカリング
+                if (drawX < -tileSize || drawY < -tileSize || drawX > canvas.width || drawY > canvas.height) continue;
+
+                const tile = mapData[row][col];
+                ctx.fillStyle = TILE_COLORS[tile];
+                ctx.fillRect(drawX, drawY, tileSize, tileSize);
+
+                // 装飾
+                ctx.fillStyle = 'rgba(0,0,0,0.1)';
+                if (tile === TILE.TREES) {
+                    ctx.beginPath();
+                    ctx.arc(drawX + tileSize/2, drawY + tileSize/2, tileSize/3, 0, Math.PI*2);
+                    ctx.fill();
+                } else if (tile === TILE.MOUNTAIN) {
+                    ctx.beginPath();
+                    ctx.moveTo(drawX + tileSize/2, drawY + tileSize*0.2);
+                    ctx.lineTo(drawX + tileSize*0.8, drawY + tileSize*0.9);
+                    ctx.lineTo(drawX + tileSize*0.2, drawY + tileSize*0.9);
+                    ctx.fill();
+                } else if (tile === TILE.CASTLE) {
+                    ctx.fillStyle = '#cbd5e1';
+                    ctx.fillRect(drawX + tileSize*0.2, drawY + tileSize*0.2, tileSize*0.6, tileSize*0.6);
+                    ctx.fillStyle = '#0f172a';
+                    ctx.fillRect(drawX + tileSize*0.4, drawY + tileSize*0.5, tileSize*0.2, tileSize*0.3);
+                } else if (tile === TILE.TOWN) {
+                    ctx.fillStyle = '#a16207';
+                    ctx.fillRect(drawX + tileSize*0.2, drawY + tileSize*0.4, tileSize*0.6, tileSize*0.4);
+                    ctx.fillStyle = '#78350f';
+                    ctx.beginPath();
+                    ctx.moveTo(drawX + tileSize/2, drawY + tileSize*0.1);
+                    ctx.lineTo(drawX + tileSize*0.9, drawY + tileSize*0.4);
+                    ctx.lineTo(drawX + tileSize*0.1, drawY + tileSize*0.4);
+                    ctx.fill();
+                }
+            }
+        }
+
+        // プレイヤー描画 (常に画面中央付近)
+        const pDrawX = player.x * tileSize - camX;
+        const pDrawY = player.y * tileSize - camY;
+        
+        ctx.font = `${tileSize * 0.8}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🛡️', pDrawX + tileSize/2, pDrawY + tileSize/2);
+    }
+
+    // --- ゲームループ・状態遷移 ---
+
+    function switchScreen(screenId) {
+        document.querySelectorAll('.screen-layer').forEach(el => el.classList.remove('screen-active'));
+        document.getElementById(screenId).classList.add('screen-active');
+    }
+
+    function startGame() {
+        audioCtx.resume();
+        sfx.blip();
+        updateStatusUI();
+        switchScreen('screen-map');
+        gameState = 'MAP';
+        resizeCanvas(); // 初回描画
+        
+        // 最初のメッセージ
+        showMessageModal("おうさま「おお ゆうしゃよ！\nせかいの どこかにいる\nドラゴンを たおしてこい！」");
+    }
+
+    function showMessageModal(text) {
+        // マップ上の簡易メッセージ(alert代わり)
+        const oldState = gameState;
+        gameState = 'MSG_WAIT';
+        
+        const modal = document.createElement('div');
+        modal.className = 'absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4';
+        modal.innerHTML = `
+            <div class="retro-box w-full max-w-md text-xl leading-relaxed cursor-pointer" id="temp-msg">
+                ${text.replace(/\n/g, '<br>')}
+                <div class="text-right mt-4 cursor-blink"></div>
+            </div>
+        `;
+        document.getElementById('game-container').appendChild(modal);
+        
+        modal.onclick = () => {
+            sfx.blip();
+            modal.remove();
+            gameState = oldState;
+        };
+    }
+
+    function updateStatusUI() {
+        document.getElementById('st-lv').innerText = player.lv;
+        document.getElementById('st-hp').innerText = player.hp;
+        document.getElementById('st-maxhp').innerText = player.maxHp;
+        document.getElementById('st-mp').innerText = player.mp;
+        document.getElementById('st-maxmp').innerText = player.maxMp;
+        document.getElementById('st-ex').innerText = player.exp;
+        
+        document.getElementById('bat-hp').innerText = player.hp;
+        document.getElementById('bat-mp').innerText = player.mp;
+    }
+
+    // --- マップ移動 ---
+
+    function movePlayer(dx, dy) {
+        if (gameState !== 'MAP') return;
+
+        const nx = player.x + dx;
+        const ny = player.y + dy;
+
+        // 画面外判定
+        if (nx < 0 || nx >= MAP_COLS || ny < 0 || ny >= MAP_ROWS) return;
+
+        const nextTile = mapData[ny][nx];
+
+        // 障害物判定
+        if (nextTile === TILE.WATER || nextTile === TILE.MOUNTAIN) {
+            sfx.bump();
+            return;
+        }
+
+        // イベントタイル
+        if (nextTile === TILE.CASTLE || nextTile === TILE.TOWN) {
+            // 回復処置
+            player.hp = player.maxHp;
+            player.mp = player.maxMp;
+            updateStatusUI();
+            sfx.step();
+            player.x = nx;
+            player.y = ny;
+            drawMap();
+            showMessageModal("やどや に とまった！\nHP と MP が ぜんかいふくした！");
+            
+            // 城/町から出るために一歩戻す (簡易処理)
+            player.x -= dx;
+            player.y -= dy;
+            drawMap();
+            return;
+        }
+
+        // 移動成功
+        player.x = nx;
+        player.y = ny;
+        sfx.step();
+        drawMap();
+
+        // エンカウント判定 (草むら、森)
+        if (nextTile === TILE.GRASS || nextTile === TILE.TREES) {
+            // 森のほうがエンカウント率高い
+            const rate = nextTile === TILE.TREES ? 0.15 : 0.08;
+            if (Math.random() < rate) {
+                triggerEncounter();
+            }
+        }
+    }
+
+    // キーボード操作
+    window.addEventListener('keydown', (e) => {
+        if (gameState === 'MSG_WAIT') {
+            // モーダルを閉じる処理をシミュレート
+            const modal = document.getElementById('temp-msg');
+            if(modal) modal.parentElement.click();
+            return;
+        }
+        if (gameState === 'BATTLE_MSG') {
+            advanceMessage();
+            return;
+        }
+        if (gameState === 'BATTLE_CMD') {
+            switch(e.key) {
+                case '1': execCommand('attack'); break;
+                case '2': execCommand('magic'); break;
+                case '4': execCommand('flee'); break;
+            }
+            return;
+        }
+        
+        if (gameState === 'MAP') {
+            switch(e.key) {
+                case 'ArrowUp': case 'w': movePlayer(0, -1); break;
+                case 'ArrowDown': case 's': movePlayer(0, 1); break;
+                case 'ArrowLeft': case 'a': movePlayer(-1, 0); break;
+                case 'ArrowRight': case 'd': movePlayer(1, 0); break;
+            }
+        }
+    });
+
+
+    // --- バトルシステム ---
+
+    function triggerEncounter() {
+        gameState = 'EVENT';
+        sfx.encounter();
+        
+        // 画面フラッシュ演出
+        const fx = document.getElementById('fx-layer');
+        fx.classList.add('anim-flash-white');
+        
+        setTimeout(() => {
+            fx.classList.remove('anim-flash-white');
+            startBattle();
+        }, 600);
+    }
+
+    function getEnemyByLevel() {
+        const available = enemies.filter(e => e.minLv <= player.lv + 1);
+        return { ...available[Math.floor(Math.random() * available.length)] }; // ディープコピー
+    }
+
+    function startBattle() {
+        gameState = 'BATTLE_MSG';
+        currentEnemy = getEnemyByLevel();
+        
+        document.getElementById('battle-enemy-emoji').innerText = currentEnemy.emoji;
+        switchScreen('screen-battle');
+        updateStatusUI();
+        
+        document.getElementById('battle-commands').style.display = 'none';
+        
+        enqueueMessage(`${currentEnemy.name} が あらわれた！`);
+        playMessageQueue().then(() => {
+            startPlayerTurn();
+        });
+    }
+
+    function startPlayerTurn() {
+        gameState = 'BATTLE_CMD';
+        document.getElementById('battle-message').innerHTML = 'コマンド？';
+        document.getElementById('battle-commands').style.display = 'grid';
+    }
+
+    // メッセージウィンドウ処理
+    function enqueueMessage(text) {
+        messageQueue.push(text);
+    }
+
+    function playMessageQueue() {
+        return new Promise((resolve) => {
+            battleResolveCb = resolve;
+            gameState = 'BATTLE_MSG';
+            document.getElementById('battle-commands').style.display = 'none';
+            advanceMessage();
+        });
+    }
+
+    function advanceMessage() {
+        if (gameState !== 'BATTLE_MSG') return;
+        
+        if (isMessageTyping) {
+            // タイピングスキップ
+            clearInterval(typeInterval);
+            isMessageTyping = false;
+            const msgBox = document.getElementById('battle-message');
+            msgBox.innerHTML = currentFullText.replace(/\n/g, '<br>');
+            msgBox.classList.add('cursor-blink');
+            return; 
+        }
+
+        if (messageQueue.length === 0) {
+            if (battleResolveCb) {
+                const cb = battleResolveCb;
+                battleResolveCb = null;
+                cb();
+            }
+            return;
+        }
+
+        const msg = messageQueue.shift();
+        typeText(msg);
+    }
+
+    function typeText(text) {
+        isMessageTyping = true;
+        currentFullText = text;
+        const msgBox = document.getElementById('battle-message');
+        msgBox.innerHTML = '';
+        msgBox.classList.remove('cursor-blink');
+        
+        let i = 0;
+        typeInterval = setInterval(() => {
+            msgBox.innerHTML += text.charAt(i) === '\n' ? '<br>' : text.charAt(i);
+            if (i % 2 === 0) sfx.blip();
+            i++;
+            if (i >= text.length) {
+                clearInterval(typeInterval);
+                isMessageTyping = false;
+                msgBox.classList.add('cursor-blink');
+            }
+        }, 30);
+    }
+
+    function screenShake() {
+        const container = document.getElementById('game-container');
+        container.classList.remove('anim-shake');
+        void container.offsetWidth;
+        container.classList.add('anim-shake');
+    }
+    
+    function enemyShake() {
+        const e = document.getElementById('battle-enemy-container');
+        e.classList.remove('anim-shake');
+        void e.offsetWidth;
+        e.classList.add('anim-shake');
+    }
+
+    function flashRed() {
+        const fx = document.getElementById('fx-layer');
+        fx.classList.remove('anim-flash');
+        void fx.offsetWidth;
+        fx.classList.add('anim-flash');
+    }
+
+    // コマンド実行
+    function execCommand(cmd) {
+        if (gameState !== 'BATTLE_CMD') return;
+        sfx.blip();
+        
+        if (cmd === 'attack') {
+            enqueueMessage(`ゆうしゃ の こうげき！`);
+            playMessageQueue().then(() => {
+                sfx.attack();
+                enemyShake();
+                // ダメージ計算: (攻/2 - 守/4) ± 乱数
+                let dmg = Math.max(1, Math.floor(player.atk/2 - currentEnemy.def/4) + Math.floor(Math.random()*3));
+                // クリティカル
+                if(Math.random() < 0.1) {
+                    dmg *= 2;
+                    enqueueMessage(`かいしんの いちげき！！`);
+                }
+                currentEnemy.hp -= dmg;
+                enqueueMessage(`${currentEnemy.name} に ${dmg} のダメージ！`);
+                
+                playMessageQueue().then(checkEnemyDeath);
+            });
+        }
+        else if (cmd === 'magic') {
+            if (player.mp >= 2) {
+                player.mp -= 2;
+                updateStatusUI();
+                enqueueMessage(`ゆうしゃ は じゅもん を となえた！`);
+                playMessageQueue().then(() => {
+                    sfx.magic();
+                    enemyShake();
+                    flashRed(); // エフェクト代わり
+                    let dmg = Math.floor(10 + Math.random() * 5 + player.lv * 2);
+                    currentEnemy.hp -= dmg;
+                    enqueueMessage(`${currentEnemy.name} に ${dmg} のダメージ！`);
+                    playMessageQueue().then(checkEnemyDeath);
+                });
+            } else {
+                enqueueMessage(`MP が たりない！`);
+                playMessageQueue().then(startPlayerTurn);
+            }
+        }
+        else if (cmd === 'flee') {
+            enqueueMessage(`ゆうしゃ は にげだした！`);
+            playMessageQueue().then(() => {
+                // 逃走成功率
+                if (Math.random() > 0.3) {
+                    endBattle();
+                } else {
+                    enqueueMessage(`しかし まわりこまれてしまった！`);
+                    playMessageQueue().then(enemyTurn);
+                }
+            });
+        }
+    }
+
+    function checkEnemyDeath() {
+        if (currentEnemy.hp <= 0) {
+            sfx.bump();
+            document.getElementById('battle-enemy-container').style.opacity = '0';
+            enqueueMessage(`${currentEnemy.name} を たおした！`);
+            enqueueMessage(`${currentEnemy.exp} の けいけんち を かくとく！`);
+            
+            playMessageQueue().then(() => {
+                player.exp += currentEnemy.exp;
+                if (player.exp >= player.nextExp) {
+                    levelUp();
+                } else {
+                    endBattle();
+                }
+            });
+        } else {
+            enemyTurn();
+        }
+    }
+
+    function levelUp() {
+        sfx.levelUp();
+        player.lv++;
+        player.maxHp += Math.floor(5 + Math.random() * 3);
+        player.hp = player.maxHp;
+        
+        // LV3から魔法が使えるようになる想定
+        if (player.lv === 3) player.maxMp = 10;
+        else if (player.lv > 3) player.maxMp += Math.floor(2 + Math.random() * 2);
+        player.mp = player.maxMp;
+        
+        player.atk += Math.floor(2 + Math.random() * 2);
+        player.def += Math.floor(1 + Math.random() * 2);
+        player.nextExp += Math.floor(player.nextExp * 1.5);
+        
+        updateStatusUI();
+        
+        enqueueMessage(`ゆうしゃ は レベル ${player.lv} に あがった！`);
+        enqueueMessage(`HP と MP が ぜんかいふくした！`);
+        playMessageQueue().then(endBattle);
+    }
+
+    function enemyTurn() {
+        enqueueMessage(`${currentEnemy.name} の こうげき！`);
+        playMessageQueue().then(() => {
+            sfx.damage();
+            screenShake();
+            flashRed();
+            
+            let dmg = Math.max(1, Math.floor(currentEnemy.atk/2 - player.def/4) + Math.floor(Math.random()*2));
+            player.hp -= dmg;
+            updateStatusUI();
+            
+            enqueueMessage(`ゆうしゃ は ${dmg} のダメージ を うけた！`);
+            playMessageQueue().then(() => {
+                if (player.hp <= 0) {
+                    gameOver();
+                } else {
+                    startPlayerTurn();
+                }
+            });
+        });
+    }
+
+    function endBattle() {
+        document.getElementById('battle-enemy-container').style.opacity = '1';
+        switchScreen('screen-map');
+        gameState = 'MAP';
+        updateStatusUI();
+    }
+
+    function gameOver() {
+        sfx.damage(); // 死亡音代わり
+        setTimeout(() => sfx.damage(), 200);
+        switchScreen('screen-gameover');
+        gameState = 'GAME_OVER';
+    }
+
+</script>
+</body>
+</html>
